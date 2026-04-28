@@ -2,367 +2,219 @@ import pyperclip
 from pynput import keyboard
 import pyautogui
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog, ttk
 import time
 import threading
 import requests
 import queue
-
+import json
+import matplotlib.pyplot as plt
+import os
+import shutil
+import math
+from PIL import Image, ImageTk
 
 # --- AYARLAR ---
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_ADI = "gemini-3-flash-preview:latest"  # Ana model (F8)
-TEXT_MODEL_CANDIDATES = [
-    MODEL_ADI,
-    "gemini-3-flash-preview:cloud",
-]
+MODEL_ADI = "gemini-3-flash-preview" 
+TEXT_MODEL_CANDIDATES = [MODEL_ADI]
+KISAYOL_METIN = keyboard.Key.f8
 
-KISAYOL_METIN = keyboard.Key.f8  # Metin secimi icin kisayol
-
-
-# Global değişkenler
+# Global Değişkenler
 root = None
 gui_queue = queue.Queue()
 kisayol_basildi = False
 
+# --- PROMPT TASLAĞI ---
+ORTAK_PROMPT = (
+    "Aşağıdaki metni analiz et ve teknik verileri sayısal olarak çıkar. "
+    "Cevabını KESİNLİKLE şu formatta ver:\n\n"
+    "---VERI---\n"
+    "{\"Ürün 1\": {\"Özellik\": rakam}, \"Ürün 2\": {\"Özellik\": rakam}}\n"
+    "---YORUM---\n"
+    "Verilere dayanarak acımasız ve net bir karşılaştırma yorumu yaz."
+)
 
-# --- MENÜ SEÇENEKLERİ VE PROMPT'LAR ---
 ISLEMLER = {
-    "📝 Gramer Düzelt": "Bu metni Türkçe yazım ve dil bilgisi kurallarına göre düzelt, resmi ve akıcı olsun. Sadece sonucu ver.",
-    "🇬🇧 İngilizceye Çevir": "Bu metni İngilizceye çevir. Sadece çeviriyi ver.",
-    "🇹🇷 Türkçeye Çevir": "Bu metni Türkçeye çevir. Sadece çeviriyi ver.",
-    "📑 Özetle (Madde Madde)": "Bu metni analiz et ve en önemli noktaları madde madde özetle.",
-    "💼 Daha Resmi Yap": "Bu metni kurumsal bir e-posta diline çevir, çok resmi olsun.",
-    "🐍 Python Koduna Çevir": "Bu metindeki isteği yerine getiren bir Python kodu yaz. Sadece kodu ver.",
-    "📧 Cevap Yaz (Mail)": "Bu gelen bir e-posta, buna kibar ve profesyonel bir cevap metni taslağı yaz.",
-    "🎮 PS5 Oyun Skor + Acımasız Yorum": (
-        "Seçili metni bir PS5 oyunu adı olarak ele al. Aşağıdaki formatta Türkçe cevap ver:\n"
-        "1) Oyun: <ad>\n"
-        "2) Topluluk Beğeni Skorları:\n"
-        "- Metacritic User Score: <değer veya 'bilgi yok'>\n"
-        "- OpenCritic / benzer eleştirmen ortalaması: <değer veya 'bilgi yok'>\n"
-        "- Oyuncu yorumu ortalaması (PS Store vb.): <değer veya 'bilgi yok'>\n"
-        "3) Hüküm: sadece 'IYI' veya 'KOTU'\n"
-        "4) Acımasız Yorum: 2-4 cümle, net ve sert.\n"
-        "Kurallar: Kesin bilmediğin puanı uydurma, onun yerine 'bilgi yok' yaz. "
-        "Yorumu skorlarla tutarlı kur."
-    ),
+    "📊 Verileri Analiz Et ve Sütun Grafiği ile Karşılaştır": ORTAK_PROMPT,
+    "🕸️ Teknik Özellikleri Radar Grafiği ile Görselleştir": ORTAK_PROMPT,
 }
 
-
 def get_available_text_model():
-    """Metin işlemede kullanılabilir modeli seçer."""
-    preferred_models = []
-    for model in TEXT_MODEL_CANDIDATES:
-        if model and model not in preferred_models:
-            preferred_models.append(model)
-
     try:
         response = requests.get("http://localhost:11434/api/tags", timeout=5)
-        if response.status_code != 200:
+        if response.status_code == 200:
             return MODEL_ADI
-
-        models = response.json().get("models", [])
-        installed_lower = {m.get("name", "").lower(): m.get("name", "") for m in models}
-
-        for candidate in preferred_models:
-            candidate_lower = candidate.lower()
-            if candidate_lower in installed_lower:
-                return installed_lower[candidate_lower]
-
-            candidate_base = candidate_lower.split(":")[0]
-            for installed_name_lower, installed_name in installed_lower.items():
-                if installed_name_lower.startswith(candidate_base + ":"):
-                    return installed_name
-    except Exception:
-        pass
-
+    except: pass
     return MODEL_ADI
 
-
 def ollama_cevap_al(prompt):
-    """Ollama API'den cevap al."""
     try:
-        aktif_model = get_available_text_model()
         payload = {
-            "model": aktif_model,
+            "model": get_available_text_model(),
             "prompt": prompt,
             "stream": False,
-            "options": {
-                "temperature": 0.7,
-                "top_p": 0.9,
-            },
+            "options": {"temperature": 0.2, "top_p": 0.9},
         }
-
         response = requests.post(OLLAMA_URL, json=payload, timeout=60)
-
         if response.status_code == 200:
-            result = response.json()
-            return result.get("response", "").strip()
-
-        err_msg = (
-            f"Ollama API Hatası: {response.status_code}\n"
-            f"Model: {aktif_model}\n"
-            f"Cevap: {response.text}"
-        )
-        print(f"❌ {err_msg}")
-        gui_queue.put((messagebox.showerror, ("API Hatası", err_msg)))
-        return None
-
-    except requests.exceptions.ConnectionError:
-        err_msg = (
-            "Ollama'ya bağlanılamadı.\n"
-            "Programın çalıştığından emin olun!\n"
-            "(http://localhost:11434)"
-        )
-        print(f"❌ {err_msg}")
-        gui_queue.put((messagebox.showerror, ("Bağlantı Hatası", err_msg)))
-        return None
-    except Exception as e:
-        err_msg = f"Beklenmeyen Hata: {e}"
-        print(f"❌ {err_msg}")
-        gui_queue.put((messagebox.showerror, ("Hata", err_msg)))
-        return None
-
+            return response.json().get("response", "").strip()
+    except: return None
 
 def strip_code_fence(text):
-    if not text:
-        return text
+    if not text: return text
     cleaned = text.strip()
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
-        lines = lines[1:] if lines else []
-        while lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
+        lines = lines[1:-1] if len(lines) > 2 else lines
         cleaned = "\n".join(lines).strip()
     return cleaned
 
-
-def secili_metni_kopyala(max_deneme=4):
+def secili_metni_kopyala():
     sentinel = f"__AI_ASISTAN__{time.time_ns()}__"
-    try:
-        pyperclip.copy(sentinel)
-    except Exception:
-        pass
-
-    for _ in range(max_deneme):
+    pyperclip.copy(sentinel)
+    for _ in range(4):
         pyautogui.hotkey("ctrl", "c")
         time.sleep(0.2)
         metin = pyperclip.paste()
-        if metin and metin.strip() and metin != sentinel:
-            return metin
+        if metin and metin.strip() and metin != sentinel: return metin
     return ""
 
+def grafik_olustur(veri_metni, komut_adi, dosya_adi="temp_graph.png"):
+    try:
+        veri_metni = strip_code_fence(veri_metni.strip())
+        if veri_metni.lower().startswith("json"): veri_metni = veri_metni[4:].strip()
+        data = json.loads(veri_metni)
+        labels = list(data.keys())
+        attributes = []
+        for l in labels:
+            for a in data[l].keys():
+                if a not in attributes: attributes.append(a)
+        
+        if "Sütun" in komut_adi:
+            fig, ax = plt.subplots(figsize=(7, 4))
+            x = list(range(len(attributes)))
+            width = 0.8 / len(labels)
+            for i, label in enumerate(labels):
+                vals = [float(data[label].get(a, 0)) for a in attributes]
+                ax.bar([p + (i - len(labels)/2 + 0.5) * width for p in x], vals, width, label=label)
+            
+            ax.set_ylabel('Değerler')
+            ax.set_title('Özellik Karşılaştırma Grafiği')
+            ax.set_xticks(x)
+            # YAZILARIN BİRBİRİNE GİRMESİNİ ENGELLEYEN 45 DERECE EĞİM AYARI
+            ax.set_xticklabels(attributes, rotation=45, ha='right', fontsize=9)
+            ax.legend()
+        
+        elif "Radar" in komut_adi:
+            angles = [n / float(len(attributes)) * 2 * math.pi for n in range(len(attributes))]
+            angles += angles[:1]
+            fig, ax = plt.subplots(figsize=(7, 4), subplot_kw=dict(polar=True))
+            
+            max_vals = {a: max([float(data[l].get(a, 0)) for l in labels]) or 1 for a in attributes}
+            for label in labels:
+                vals = [float(data[label].get(a, 0)) / max_vals[a] for a in attributes]
+                vals += vals[:1]
+                ax.plot(angles, vals, linewidth=2, label=label)
+                ax.fill(angles, vals, alpha=0.25)
+            ax.set_xticks(angles[:-1])
+            ax.set_xticklabels(attributes)
+            ax.set_yticklabels([])
+            ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.1))
 
-def pencere_modunda_gosterilsin_mi(komut_adi):
-    return "PS5 Oyun Skor" in komut_adi
+        plt.tight_layout()
+        plt.savefig(dosya_adi, dpi=100)
+        plt.close()
+        return True, data
+    except: return False, None
 
-
-def sonuc_penceresi_goster(baslik, icerik):
+def sonuc_penceresi_goster(baslik, icerik, resim_yolu=None, ham_veri=None):
     pencere = tk.Toplevel(root)
     pencere.title(baslik)
-    pencere.geometry("780x520")
-    pencere.minsize(520, 320)
+    pencere.geometry("820x820")
+    pencere.configure(bg="#1f1f1f")
     pencere.attributes("-topmost", True)
 
-    frame = tk.Frame(pencere, bg="#1f1f1f")
-    frame.pack(fill="both", expand=True, padx=10, pady=10)
+    canvas = tk.Canvas(pencere, bg="#1f1f1f", highlightthickness=0)
+    scrollbar = tk.Scrollbar(pencere, orient="vertical", command=canvas.yview)
+    scroll_frame = tk.Frame(canvas, bg="#1f1f1f")
+    
+    scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
 
-    text_alani = tk.Text(
-        frame,
-        wrap="word",
-        bg="#2b2b2b",
-        fg="white",
-        insertbackground="white",
-        font=("Segoe UI", 10),
-        padx=10,
-        pady=10,
-    )
-    kaydirma = tk.Scrollbar(frame, command=text_alani.yview)
-    text_alani.configure(yscrollcommand=kaydirma.set)
+    if resim_yolu and os.path.exists(resim_yolu):
+        img = Image.open(resim_yolu)
+        img.thumbnail((750, 380), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(img)
+        lbl = tk.Label(scroll_frame, image=photo, bg="#1f1f1f")
+        lbl.image = photo
+        lbl.pack(pady=10)
 
-    text_alani.pack(side="left", fill="both", expand=True)
-    kaydirma.pack(side="right", fill="y")
+    if ham_veri:
+        t_frame = tk.Frame(scroll_frame, bg="#1f1f1f")
+        t_frame.pack(fill="x", padx=20)
+        urunler = list(ham_veri.keys())
+        tree = ttk.Treeview(t_frame, columns=["Ö"]+urunler, show="headings", height=3)
+        tree.heading("Ö", text="Özellik")
+        for u in urunler: tree.heading(u, text=u); tree.column(u, width=100, anchor="center")
+        
+        attrs = []
+        for u in urunler:
+            for a in ham_veri[u].keys():
+                if a not in attrs: attrs.append(a)
+        for a in attrs:
+            tree.insert("", "end", values=[a] + [ham_veri[u].get(a, "-") for u in urunler])
+        tree.pack(fill="x")
 
-    text_alani.insert("1.0", icerik)
-    text_alani.config(state="disabled")
+    txt = tk.Text(scroll_frame, wrap="word", bg="#2b2b2b", fg="white", height=8, font=("Segoe UI", 10), padx=10, pady=10)
+    txt.pack(fill="x", padx=20, pady=10)
+    txt.insert("1.0", icerik)
+    txt.config(state="disabled")
 
-    alt_frame = tk.Frame(pencere, bg="#1f1f1f")
-    alt_frame.pack(fill="x", padx=10, pady=(0, 10))
+    b_frame = tk.Frame(scroll_frame, bg="#1f1f1f")
+    b_frame.pack(fill="x", padx=20, pady=10)
 
-    def panoya_kopyala():
-        pyperclip.copy(icerik)
+    tk.Button(b_frame, text="📋 Yorumu Kopyala", command=lambda: pyperclip.copy(icerik), bg="#3d3d3d", fg="white", relief="flat", padx=10).pack(side="left", padx=5)
+    
+    if resim_yolu:
+        def kaydet():
+            y = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
+            if y: shutil.copy(resim_yolu, y); messagebox.showinfo("Başarılı", "Grafik kaydedildi!")
+        tk.Button(b_frame, text="💾 GRAFİĞİ KAYDET", command=kaydet, bg="#0f766e", fg="white", font=("Segoe UI", 9, "bold"), relief="flat", padx=15).pack(side="left", padx=5)
 
-    tk.Button(
-        alt_frame,
-        text="Panoya Kopyala",
-        command=panoya_kopyala,
-        bg="#3d3d3d",
-        fg="white",
-        activebackground="#4d4d4d",
-        activeforeground="white",
-        relief="flat",
-        padx=12,
-        pady=6,
-    ).pack(side="left")
+    tk.Button(b_frame, text="Kapat", command=pencere.destroy, bg="#3d3d3d", fg="white", relief="flat", padx=10).pack(side="right", padx=5)
 
-    tk.Button(
-        alt_frame,
-        text="Kapat",
-        command=pencere.destroy,
-        bg="#3d3d3d",
-        fg="white",
-        activebackground="#4d4d4d",
-        activeforeground="white",
-        relief="flat",
-        padx=12,
-        pady=6,
-    ).pack(side="right")
-
-    pencere.focus_force()
-    pencere.lift()
-
-
-def islemi_yap(komut_adi, secili_metin):
-    prompt_emri = ISLEMLER[komut_adi]
-    full_prompt = f"{prompt_emri}:\n\n'{secili_metin}'"
-
-    print(f"🤖 İşlem: {komut_adi}")
-    print("⏳ Ollama ile işleniyor...")
-
-    sonuc = ollama_cevap_al(full_prompt)
-    if not sonuc:
-        print("❌ Sonuç alınamadı.")
-        return
-
-    sonuc = strip_code_fence(sonuc)
-    if sonuc.startswith("'") and sonuc.endswith("'"):
-        sonuc = sonuc[1:-1]
-
-    if pencere_modunda_gosterilsin_mi(komut_adi):
-        gui_queue.put((sonuc_penceresi_goster, (komut_adi, sonuc)))
-        print("âœ… SonuÃ§ ayrÄ± pencerede gÃ¶sterildi.")
-        return
-
-    time.sleep(0.2)
-    pyperclip.copy(sonuc)
-    time.sleep(0.1)
-    pyautogui.hotkey("ctrl", "v")
-    print("✅ İşlem tamamlandı!")
-
-
-def process_queue():
-    """Kuyruktaki GUI işlemlerini ana thread'de çalıştırır."""
-    try:
-        while True:
-            try:
-                task = gui_queue.get_nowait()
-            except queue.Empty:
-                break
-            func, args = task
-            func(*args)
-    finally:
-        if root:
-            root.after(100, process_queue)
-
+def islemi_yap(k, m):
+    s = ollama_cevap_al(f"{ISLEMLER[k]}:\n\n'{m}'")
+    if s and "---VERI---" in s:
+        try:
+            parts = s.split("---YORUM---")
+            v = parts[0].split("---VERI---")[1].strip()
+            y = parts[1].strip()
+            ok, ham = grafik_olustur(v, k)
+            gui_queue.put((sonuc_penceresi_goster, (k, y, "temp_graph.png" if ok else None, ham)))
+        except: pass
 
 def menu_goster():
-    """Metni kopyalar ve menüyü gösterir (ana thread)."""
-    secili_metin = secili_metni_kopyala()
-    if not secili_metin.strip():
-        gui_queue.put(
-            (
-                messagebox.showwarning,
-                (
-                    "Secim Bulunamadi",
-                    "Lutfen once metin secin, sonra F8 ile menuyu acin.",
-                ),
-            )
-        )
-        return
+    m = secili_metni_kopyala()
+    if not m.strip(): return
+    menu = tk.Menu(root, tearoff=0, bg="#2b2b2b", fg="white")
+    for k in ISLEMLER.keys():
+        menu.add_command(label=k, command=lambda c=k: threading.Thread(target=islemi_yap, args=(c, m), daemon=True).start())
+    px, py = pyautogui.position()
+    menu.tk_popup(px, py)
 
-    menu = tk.Menu(
-        root,
-        tearoff=0,
-        bg="#2b2b2b",
-        fg="white",
-        activebackground="#4a4a4a",
-        activeforeground="white",
-        font=("Segoe UI", 10),
-    )
-
-    def komut_olustur(k_adi, s_metin):
-        def komut_calistir():
-            threading.Thread(
-                target=islemi_yap, args=(k_adi, s_metin), daemon=True
-            ).start()
-
-        return komut_calistir
-
-    for baslik in ISLEMLER.keys():
-        menu.add_command(label=baslik, command=komut_olustur(baslik, secili_metin))
-
-    menu.add_separator()
-    menu.add_command(label="❌ İptal", command=lambda: None)
-
-    try:
-        x, y = pyautogui.position()
-        menu.tk_popup(x, y)
-    finally:
-        menu.grab_release()
-
-
-def on_press(key):
-    global kisayol_basildi
-    try:
-        if key == KISAYOL_METIN and not kisayol_basildi:
-            kisayol_basildi = True
-            gui_queue.put((menu_goster, ()))
-    except AttributeError:
-        pass
-
-
-def on_release(key):
-    global kisayol_basildi
-    try:
-        if key == KISAYOL_METIN:
-            kisayol_basildi = False
-    except AttributeError:
-        pass
-
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("🤖 AI Asistan - Metin İşleme")
-    print("=" * 60)
-    aktif_text_model = get_available_text_model()
-    print(f"📦 Metin İşleme (F8): {aktif_text_model}")
-    print()
-    print("🔧 Kullanım:")
-    print("   F8 - Metin sec ve AI islemleri yap")
-    print()
-    print("⚠️ Programı kapatmak için bu pencereyi kapatın veya Ctrl+C yapın.")
-    print("=" * 60)
-
-    try:
-        test_response = requests.get("http://localhost:11434/api/tags", timeout=5)
-        if test_response.status_code == 200:
-            print("✅ Ollama bağlantısı başarılı!")
-        else:
-            print("⚠️ Ollama'ya bağlanılamadı, servisi kontrol edin!")
-    except Exception:
-        print("⚠️ Ollama çalışmıyor olabilir! 'ollama serve' ile başlatın.")
-
-    print()
-
-    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-    listener.start()
-
-    root = tk.Tk()
-    root.withdraw()
+def process_queue():
+    while not gui_queue.empty():
+        f, a = gui_queue.get(); f(*a)
     root.after(100, process_queue)
 
-    try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        print("Kapatılıyor...")
+if __name__ == "__main__":
+    keyboard.Listener(on_press=lambda k: gui_queue.put((menu_goster, ())) if k == KISAYOL_METIN else None).start()
+    root = tk.Tk()
+    root.withdraw()
+    process_queue()
+    root.mainloop()
