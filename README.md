@@ -33,3 +33,45 @@ Bu proje, metin yığınlarını analiz ederek içerisindeki teknik verileri cı
 ## 👨‍💻 Mühendislik Yaklaşımı
 
 Bu proje, bir yazılım mühendisliği öğrencisi tarafından; veri madenciliği, doğal dil işleme (NLP) ve GUI tasarımı disiplinlerini birleştirmek amacıyla geliştirilmiştir. Özellikle veri setleri arasındaki uçurumları kapatmak için kullanılan normalizasyon algoritmaları ve çoklu iş parçacığı (multithreading) yönetimi projenin teknik temelini oluşturur.
+
+```mermaid
+flowchart TD
+    %% Ana Akış Başlangıcı
+    Start([Uygulama Başlatıldı]) --> Listen[Klavye Dinleyicisi: F8 Bekleniyor]
+    
+    %% Kullanıcı Etkileşimi ve Veri Yakalama
+    Listen --> Selection[Kullanıcı Metni Seçer ve F8'e Basar]
+    Selection --> Copy[Metin Panoya Kopyalanır & Sentinel Kontrolü]
+    Copy --> Menu{İşlem Menüsü}
+    
+    %% Multithreading Katmanı
+    Menu -->|İşlem Seçildi| Thread[Arka Plan İş Parçacığı - Threading]
+    
+    subgraph AI_Core [Yapay Zeka İşleme Modülü]
+        Thread --> Prompt[Prompt Mühendisliği & JSON Yapılandırma]
+        Prompt --> Ollama[Ollama API: Gemini 3 Flash]
+        Ollama --> Parser[JSON Parser & Teknik Veri Ayıklama]
+    end
+    
+    %% Grafik ve Analiz Katmanı
+    Parser --> Viz_Type{Görselleştirme Modu}
+    
+    subgraph Graphics_Engine [Grafik ve Analiz Motoru]
+        Viz_Type -->|Sütun| Bar[Matplotlib: 45 Derece Eksen Düzenleme]
+        Viz_Type -->|Radar| Radar[Matplotlib: Veri Normalizasyonu]
+        Bar --> Render[Grafik Render Edilir .png]
+        Radar --> Render
+    end
+    
+    %% Sonuç ve Çıktı Katmanı
+    Render --> Queue[GUI Queue: Sonuç Ana İş Parçacığına Aktarılır]
+    Queue --> Window[Sonuç Penceresi: Grafik + Tablo + AI Yorumu]
+    Window --> Save[Opsiyonel: Grafiği Kaydet]
+    Save --> End([Bitiş])
+
+    %% Görsel Stillendirme
+    style AI_Core fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Graphics_Engine fill:#f0f7ff,stroke:#0056b3,stroke-width:2px
+    style Start fill:#dcfce7,stroke:#166534
+    style End fill:#fee2e2,stroke:#991b1b
+```
